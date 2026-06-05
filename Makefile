@@ -3,7 +3,7 @@ ifndef TARGET_COMPILE
 endif
 
 ifndef KP_DIR
-    KP_DIR = ../..
+    KP_DIR = ./KernelPatch/
 endif
 
 CC = $(TARGET_COMPILE)gcc
@@ -16,9 +16,9 @@ INCLUDE_FLAGS := $(foreach dir,$(INCLUDE_DIRS),-I$(KP_DIR)/kernel/$(dir))
 TARGET := samsung_hid_fix
 objs := ssmon_guard.o
 
-all: $(TARGET).kpm
+all: build/$(TARGET).kpm
 
-$(TARGET).kpm: $(objs)
+build/$(TARGET).kpm: $(objs)
 	$(CC) -r -o $@ $^
 
 %.o: %.c
@@ -26,5 +26,5 @@ $(TARGET).kpm: $(objs)
 
 .PHONY: clean
 clean:
-	rm -rf *.kpm
+	rm -rf build/*.kpm
 	find . -name "*.o" | xargs rm -f
