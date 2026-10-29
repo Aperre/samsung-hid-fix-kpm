@@ -1,26 +1,22 @@
 # Samsung SS Monitor HID Freeze Fix
 
-This KernelSU package replaces Samsung's `usb_f_ss_mon_gadget.ko` with a
-build of the driver source in `driver/f_ss_mon_gadget.c`. The replacement
-keeps the existing gadget implementation and exported symbols but makes
-`usb_reset_notify()` and `make_suspend_current_event()` no-ops.
+This KernelSU package uses `samsung_hid_fix_lkm.ko`, the native hook module
+built from `native/samsung_hid_fix_lkm.c`. It hooks Samsung's
+`usb_reset_notify()` and `make_suspend_current_event()` functions without
+trying to load a second copy of `usb_f_ss_mon_gadget.ko`.
 
 ## GitHub Actions
 
-The workflow `.github/workflows/build-ksu-module.yml` builds the SM8550
-kernel tree, stages this driver as an in-tree gadget function, and packages
-the resulting `usb_f_ss_mon_gadget.ko` into a KernelSU ZIP. Download the ZIP
-and standalone module from the Actions run's artifacts.
+The workflow `.github/workflows/build-ksu-module.yml` builds the native LKM
+against the SM8550 kernel source and packages it into a KernelSU ZIP. Download
+the ZIP and standalone LKM from the Actions run artifacts.
 
-The workflow currently uses
-`Aperre/Samsung_kernel_sm8550-common-SUSFS` branch
-`fix/anykernel3-susfs-kdp-ns` for the kernel build.
+## Install and diagnose
 
-## Compatibility
+Install the ZIP in KernelSU and reboot. The service waits up to 30 seconds for
+`usb_f_ss_mon_gadget`, then loads `samsung_hid_fix_lkm.ko`. The service log
+is `/data/adb/ss-mon-hid-fix.log`.
 
-A kernel module is not universal. It must match the target kernel's release,
-configuration, symbol versions, and vendor ABI. A successful CI build does
-not prove it can load on a different phone/kernel build. Install only on the
-matching kernel build and keep a recovery path available.
-
-The service logs to `/data/adb/ss-mon-hid-fix.log`.
+If the module still does not load, check that log and run `dmesg | grep -iE
+'ksu|samsung_hid_fix|kprobe|unknown symbol|vermagic'`. A module built for a
+different kernel build/configuration may fail to load.

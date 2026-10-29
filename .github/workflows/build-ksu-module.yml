@@ -1,13 +1,21 @@
 name: Build KernelSU SS Monitor module
 
 on:
+  # Build when this module/workflow changes on any branch, including PR fix branches.
   push:
+    paths:
+      - "kernelsu-module/**"
+      - ".github/workflows/build-ksu-module.yml"
+
+  # Also validate proposed changes before they are merged into master.
+  pull_request:
     branches:
-      - feature/ksu-fs-mon-replacement
       - master
     paths:
       - "kernelsu-module/**"
       - ".github/workflows/build-ksu-module.yml"
+
+  # Allow a manual run from the Actions tab.
   workflow_dispatch:
 
 permissions:
@@ -19,7 +27,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build SS monitor module and KernelSU ZIP
+    name: Build native KernelSU hook module and ZIP
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
@@ -92,40 +100,17 @@ jobs:
           sudo swapon /tmp/swapbuild
           free -h
 
-      - name: Stage source as an in-tree gadget function
-        run: |
-          set -euo pipefail
-          KERNEL_DIR="$GITHUB_WORKSPACE/kernel"
-          FUNCTION_DIR="$KERNEL_DIR/drivers/usb/gadget/function"
-
-          test -f "$FUNCTION_DIR/Makefile"
-          test -f "$FUNCTION_DIR/../configfs.h"
-
-          install -m 0644 \
-            "$GITHUB_WORKSPACE/module-src/kernelsu-module/driver/f_ss_mon_gadget.c" \
-            "$FUNCTION_DIR/f_ss_mon_gadget.c"
-
-          # Force this single source file to build as a loadable module for CI.
-          # The Kconfig changes remain local to the runner; no kernel source is changed in the PR.
-          if ! grep -q '^obj-m += usb_f_ss_mon_gadget.o$' "$FUNCTION_DIR/Makefile"; then
-            cat >> "$FUNCTION_DIR/Makefile" <<'EOF'
-
-# CI-only entry for building the KernelSU replacement-module artifact.
-usb_f_ss_mon_gadget-y := f_ss_mon_gadget.o
-obj-m += usb_f_ss_mon_gadget.o
-EOF
-          fi
-
-      - name: Build kernel metadata and replacement module
+      - name: Build kernel and native KernelSU hook module
         working-directory: kernel
         run: |
-          set -o pipefail
+          set -euo pipefail
           chmod +x ./build.sh
+          set -o pipefail
           ./build.sh 2>&1 | tee "$GITHUB_WORKSPACE/build-kernel.log"
 
           test -s out/.config
           test -s out/Module.symvers || {
-            echo "::error::The kernel build did not produce out/Module.symvers; refusing to build an incompatible module." >&2
+            echo "::error::The kernel build did not produce out/Module.symvers." >&2
             exit 1
           }
 
@@ -136,26 +121,25 @@ EOF
             LLVM=1 \
             LLVM_IAS=1 \
             -j"$(nproc)" \
-            M="$GITHUB_WORKSPACE/kernel/drivers/usb/gadget/function" \
+            M="$GITHUB_WORKSPACE/module-src/kernelsu-module" \
             modules
 
-          KO="$(find out -type f -name usb_f_ss_mon_gadget.ko -print -quit)"
-          test -n "$KO" && test -s "$KO" || {
-            echo "::error::Kbuild finished without usb_f_ss_mon_gadget.ko." >&2
+          KO="$GITHUB_WORKSPACE/module-src/kernelsu-module/samsung_hid_fix_lkm.ko"
+          test -s "$KO" || {
+            echo "::error::Kbuild finished without samsung_hid_fix_lkm.ko." >&2
             exit 1
           }
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          install -m 0644 "$KO" "$GITHUB_WORKSPACE/dist/usb_f_ss_mon_gadget.ko"
-          modinfo "$GITHUB_WORKSPACE/dist/usb_f_ss_mon_gadget.ko"
-          echo "KERNEL_RELEASE=$(make O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 -s kernelrelease)" \
-            >> "$GITHUB_ENV"
+          install -m 0644 "$KO" "$GITHUB_WORKSPACE/dist/samsung_hid_fix_lkm.ko"
+          modinfo "$GITHUB_WORKSPACE/dist/samsung_hid_fix_lkm.ko"
+          echo "KERNEL_RELEASE=$(make O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 -s kernelrelease)" >> "$GITHUB_ENV"
 
       - name: Package KernelSU module
         working-directory: module-src
         run: |
           set -euo pipefail
           bash kernelsu-module/package-ss-mon-ksu-zip.sh \
-            "$GITHUB_WORKSPACE/dist/usb_f_ss_mon_gadget.ko" \
+            "$GITHUB_WORKSPACE/dist/samsung_hid_fix_lkm.ko" \
             "$GITHUB_WORKSPACE/dist/samsung-ss-mon-hid-fix-ksu.zip"
           sha256sum "$GITHUB_WORKSPACE/dist/"*
 
@@ -164,7 +148,7 @@ EOF
             echo
             echo "- Kernel release used for build: `$KERNEL_RELEASE`"
             echo "- KernelSU ZIP: `samsung-ss-mon-hid-fix-ksu.zip`"
-            echo "- Standalone driver: `usb_f_ss_mon_gadget.ko`"
+            echo "- Standalone driver: `samsung_hid_fix_lkm.ko`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload KernelSU ZIP and driver
@@ -173,7 +157,7 @@ EOF
           name: samsung-ss-mon-hid-fix-${{ github.sha }}
           path: |
             dist/samsung-ss-mon-hid-fix-ksu.zip
-            dist/usb_f_ss_mon_gadget.ko
+            dist/samsung_hid_fix_lkm.ko
           if-no-files-found: error
           retention-days: 30
 
