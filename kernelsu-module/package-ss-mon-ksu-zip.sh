@@ -14,7 +14,7 @@ PKG_DIR="$(mktemp -d)"
 trap 'rm -rf "$PKG_DIR"' EXIT
 
 install -m 0644 "$SCRIPT_DIR/module.prop" "$PKG_DIR/module.prop"
-install -m 0755 "$SCRIPT_DIR/service-ss-mon.sh" "$PKG_DIR/service.sh"
+install -m 0755 $SCRIPT_DIR/service.sh "$PKG_DIR/service.sh"
 install -m 0644 "$KO" "$PKG_DIR/usb_f_ss_mon_gadget.ko"
 
 mkdir -p "$(dirname -- "$OUTPUT_ZIP")"
