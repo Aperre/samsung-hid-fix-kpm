@@ -1,2 +1,9 @@
 samsung_hid_fix.kpm
 ssmon_guard.o
+*.ko
+*.o
+*.mod
+*.mod.c
+Module.symvers
+modules.order
+.*.cmd
