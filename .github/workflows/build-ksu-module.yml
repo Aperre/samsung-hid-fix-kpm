@@ -1,13 +1,21 @@
 name: Build KernelSU SS Monitor module
 
 on:
+  # Build when this module/workflow changes on any branch, including PR fix branches.
   push:
+    paths:
+      - "kernelsu-module/**"
+      - ".github/workflows/build-ksu-module.yml"
+
+  # Also validate proposed changes before they are merged into master.
+  pull_request:
     branches:
-      - feature/ksu-fs-mon-replacement
       - master
     paths:
       - "kernelsu-module/**"
       - ".github/workflows/build-ksu-module.yml"
+
+  # Allow a manual run from the Actions tab.
   workflow_dispatch:
 
 permissions:
