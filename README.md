@@ -1,52 +1,36 @@
-# Samsung HID Fix KPM
+# Samsung HID Fix
 
-This KPM fixes a freeze that can happen on some Samsung SM8550 devices when a
-USB HID gadget is created through configfs and connected to a PC.
+Fixes a freeze reported on some Samsung SM8550 devices when a USB HID gadget
+is created through configfs and connected to a PC. Symptoms may include a
+severely slowed/frozen UI and USB monitor, GPU fence, or workqueue errors.
 
-The symptom is usually:
-
-- the phone connects as a HID device
-- after a few seconds the UI becomes extremely slow or freezes
-- kernel logs show `usb_f_ss_mon_gadget`, `UDC busy`, `kgsl-3d0` fence errors,
-  GPU CX timeouts, and eventually workqueue lockups
-
-## Cause
-
-The HID gadget itself is not the direct problem.
-
-The bad path is Samsung's `usb_f_ss_mon_gadget` monitor code. During USB
-reset/suspend handling it queues work through the Samsung USB monitor path, and
-that can cascade into GPU/display stalls and global workqueue lockups.
-
-## Fix
-
-This module uses SukiSU KernelPatch KPM support to hook and suppress:
+The affected path is Samsung's `usb_f_ss_mon_gadget` monitor code. The fix
+suppresses two functions:
 
 - `usb_reset_notify`
 - `make_suspend_current_event`
 
-Those functions are part of Samsung's `usb_f_ss_mon_gadget` module. Suppressing
-them avoids the freeze while keeping the HID gadget usable.
+The optional `vbus_session_notify` hook was removed because it is not needed.
 
-The module also supports an optional `all` argument, which additionally hooks:
+## Native KernelSU module (no KPM)
 
-- `vbus_session_notify`
+The `kernelsu-module/` directory contains a KernelSU package source and a
+native Linux kernel module. It skips the two functions at entry using native
+Kprobes and the ARM64 calling convention, rather than using the SukiSU/
+KernelPatch KPM API.
 
-That is not needed for the known HID freeze fix. Use the default no-argument
-load first.
+**Build against the exact target device kernel tree and configuration**; there
+is no universal prebuilt `.ko`. See
+[`kernelsu-module/README.md`](kernelsu-module/README.md) for requirements,
+build and installation instructions.
 
-## Build
+## Original KPM build
 
-From the SukiSU KernelPatch source tree:
+The original KPM source/build remains available at the repository root:
 
 ```sh
-git clone https://github.com/Aperre/samsung-hid-fix-kpm
-cd samsung-hid-fix-kpm/
+git submodule update --init --recursive
 make TARGET_COMPILE=aarch64-linux-gnu-
 ```
 
-Output:
-
-```text
-samsung_hid_fix.kpm
-```
+Output: `build/samsung_hid_fix.kpm`.
