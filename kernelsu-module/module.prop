@@ -1,6 +1,6 @@
-id=samsung_hid_fix
-name=Samsung HID Fix (Native)
+id=samsung_ss_mon_hid_fix
+name=Samsung SS Monitor HID Freeze Fix
 version=0.1.0
 versionCode=1
 author=Ape
-description=Native kernel-module fix for Samsung USB HID gadget freezes. No KPM loader required.
+description=Build-matched Samsung USB SS monitor replacement with reset and suspend-current callbacks disabled.
