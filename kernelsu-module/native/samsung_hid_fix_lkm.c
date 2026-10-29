@@ -2,162 +2,105 @@
 /*
  * Native-LKM implementation of Samsung HID Fix.
  *
- * This deliberately avoids SukiSU/KernelPatch KPM APIs. It redirects the two
- * target functions with ftrace IPMODIFY and resolves their addresses through
- * temporary kprobes, so it must be built against the exact target kernel tree.
+ * No SukiSU/KernelPatch KPM API is used. At each target's entry, a kprobe
+ * redirects execution to the caller return address and sets x0 to zero. This
+ * skips the original function body, matching the KPM's skip_origin + ret=0.
+ *
+ * This implementation is intentionally ARM64-specific (the affected SM8550
+ * devices use AArch64). Build against the exact target kernel tree/config.
  */
 
 #include <linux/errno.h>
-#include <linux/ftrace.h>
 #include <linux/kprobes.h>
 #include <linux/module.h>
 #include <linux/printk.h>
-#include <linux/version.h>
-
-#if !defined(CONFIG_FUNCTION_TRACER) || !defined(CONFIG_DYNAMIC_FTRACE)
-#error "Samsung HID Fix LKM requires CONFIG_FUNCTION_TRACER and CONFIG_DYNAMIC_FTRACE"
-#endif
+#include <linux/ptrace.h>
 
 #if !defined(CONFIG_KPROBES)
-#error "Samsung HID Fix LKM requires CONFIG_KPROBES for symbol resolution"
+#error "Samsung HID Fix LKM requires CONFIG_KPROBES"
+#endif
+
+#if !defined(CONFIG_MODULES)
+#error "Samsung HID Fix LKM requires CONFIG_MODULES"
+#endif
+
+#ifndef CONFIG_ARM64
+#error "Samsung HID Fix LKM currently supports ARM64 kernels only"
 #endif
 
 #define HID_FIX_TAG "samsung_hid_fix_lkm: "
 
-struct hid_fix_hook {
+static int skip_target_function(struct kprobe *probe, struct pt_regs *regs)
+{
+	(void)probe;
+
+	/*
+	 * AArch64 procedure-call standard: x30 (regs[30]) holds the caller's
+	 * return address at function entry; x0 (regs[0]) carries the return
+	 * value. Returning nonzero tells Kprobes to skip the probed instruction.
+	 */
+	regs->regs[0] = 0;
+	regs->pc = regs->regs[30];
+	return 1;
+}
+
+struct hid_fix_probe {
 	const char *name;
-	unsigned long address;
-	unsigned long replacement;
-	struct ftrace_ops ops;
-	bool filter_installed;
+	struct kprobe probe;
 	bool active;
 };
 
-static noinline notrace unsigned long replace_usb_reset_notify(unsigned long arg0)
+static struct hid_fix_probe reset_probe = {
+	.name = "usb_reset_notify",
+};
+
+static struct hid_fix_probe suspend_probe = {
+	.name = "make_suspend_current_event",
+};
+
+static int install_probe(struct hid_fix_probe *target)
 {
-	(void)arg0;
+	int ret;
+
+	target->probe.symbol_name = target->name;
+	target->probe.pre_handler = skip_target_function;
+
+	ret = register_kprobe(&target->probe);
+	if (ret) {
+		pr_err(HID_FIX_TAG "could not hook %s (kprobe error %d)\n",
+		       target->name, ret);
+		return ret;
+	}
+
+	target->active = true;
+	pr_info(HID_FIX_TAG "hooked %s at %px\n", target->name,
+		target->probe.addr);
 	return 0;
 }
 
-static noinline notrace unsigned long replace_make_suspend_current_event(void)
+static void remove_probe(struct hid_fix_probe *target)
 {
-	return 0;
-}
-
-static void hid_fix_ftrace_callback(unsigned long ip, unsigned long parent_ip,
-				   struct ftrace_ops *ops,
-				   struct ftrace_regs *fregs)
-{
-	struct hid_fix_hook *hook = ops->private;
-	struct pt_regs *regs;
-
-	(void)parent_ip;
-
-	if (unlikely(!hook || ip != hook->address || !fregs))
+	if (!target->active)
 		return;
 
-	regs = ftrace_get_regs(fregs);
-	if (likely(regs))
-		regs->pc = hook->replacement;
+	unregister_kprobe(&target->probe);
+	target->active = false;
+	pr_info(HID_FIX_TAG "unhooked %s\n", target->name);
 }
-
-static int resolve_symbol(const char *name, unsigned long *address)
-{
-	struct kprobe probe = {
-		.symbol_name = name,
-	};
-	int ret;
-
-	ret = register_kprobe(&probe);
-	if (ret) {
-		pr_err(HID_FIX_TAG "could not resolve '%s' (kprobe error %d)\n",
-		       name, ret);
-		return ret;
-	}
-
-	*address = (unsigned long)probe.addr;
-	unregister_kprobe(&probe);
-
-	if (!*address) {
-		pr_err(HID_FIX_TAG "symbol '%s' resolved to a null address\n", name);
-		return -ENOENT;
-	}
-
-	return 0;
-}
-
-static void remove_hook(struct hid_fix_hook *hook)
-{
-	if (hook->active) {
-		unregister_ftrace_function(&hook->ops);
-		hook->active = false;
-	}
-
-	if (hook->filter_installed) {
-		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
-		hook->filter_installed = false;
-	}
-}
-
-static int install_hook(struct hid_fix_hook *hook)
-{
-	int ret;
-
-	ret = resolve_symbol(hook->name, &hook->address);
-	if (ret)
-		return ret;
-
-	hook->ops.func = hid_fix_ftrace_callback;
-	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS | FTRACE_OPS_FL_IPMODIFY;
-	hook->ops.private = hook;
-
-	ret = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
-	if (ret) {
-		pr_err(HID_FIX_TAG "ftrace cannot filter '%s' at %px (error %d); "
-		       "the function may not be instrumented by ftrace\n",
-		       hook->name, (void *)hook->address, ret);
-		return ret;
-	}
-	hook->filter_installed = true;
-
-	ret = register_ftrace_function(&hook->ops);
-	if (ret) {
-		pr_err(HID_FIX_TAG "could not register ftrace hook for '%s' (error %d)\n",
-		       hook->name, ret);
-		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
-		hook->filter_installed = false;
-		return ret;
-	}
-
-	hook->active = true;
-	pr_info(HID_FIX_TAG "hooked %s at %px -> %px\n", hook->name,
-		(void *)hook->address, (void *)hook->replacement);
-	return 0;
-}
-
-static struct hid_fix_hook reset_hook = {
-	.name = "usb_reset_notify",
-	.replacement = (unsigned long)replace_usb_reset_notify,
-};
-
-static struct hid_fix_hook suspend_hook = {
-	.name = "make_suspend_current_event",
-	.replacement = (unsigned long)replace_make_suspend_current_event,
-};
 
 static int __init samsung_hid_fix_init(void)
 {
 	int ret;
 
-	pr_info(HID_FIX_TAG "initializing native ftrace hooks (no KPM)\n");
+	pr_info(HID_FIX_TAG "initializing native ARM64 kprobes (no KPM)\n");
 
-	ret = install_hook(&reset_hook);
+	ret = install_probe(&reset_probe);
 	if (ret)
 		return ret;
 
-	ret = install_hook(&suspend_hook);
+	ret = install_probe(&suspend_probe);
 	if (ret) {
-		remove_hook(&reset_hook);
+		remove_probe(&reset_probe);
 		return ret;
 	}
 
@@ -167,8 +110,8 @@ static int __init samsung_hid_fix_init(void)
 
 static void __exit samsung_hid_fix_exit(void)
 {
-	remove_hook(&suspend_hook);
-	remove_hook(&reset_hook);
+	remove_probe(&suspend_probe);
+	remove_probe(&reset_probe);
 	pr_info(HID_FIX_TAG "hooks removed\n");
 }
 
@@ -177,5 +120,5 @@ module_exit(samsung_hid_fix_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Ape");
-MODULE_DESCRIPTION("Native ftrace replacement for Samsung USB HID freeze paths");
+MODULE_DESCRIPTION("Native kprobe replacement for Samsung USB HID freeze paths");
 MODULE_VERSION("0.1.0");
