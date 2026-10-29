@@ -10,8 +10,6 @@ suppresses two functions:
 - `usb_reset_notify`
 - `make_suspend_current_event`
 
-The optional `vbus_session_notify` hook was removed because it is not needed.
-
 ## Native KernelSU module (no KPM)
 
 The `kernelsu-module/` directory contains a KernelSU package source and a
@@ -24,12 +22,11 @@ is no universal prebuilt `.ko`. See
 [`kernelsu-module/README.md`](kernelsu-module/README.md) for requirements,
 build and installation instructions.
 
-## Original KPM build
-
-The original KPM source/build remains available at the repository root:
+## Build
 
 ```sh
-git submodule update --init --recursive
+git clone https://github.com/Aperre/samsung-hid-fix-kpm
+cd samsung-hid-fix-kpm/
 make TARGET_COMPILE=aarch64-linux-gnu-
 ```
 
